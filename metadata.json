@@ -1,0 +1,5 @@
+{
+  "name": "Production Tracker MVP",
+  "description": "A client-only MVP for submitting and tracking production data. Features email/password login restricted to an allowlist, a detailed submission form with photo uploads, and a dashboard to view submission history.",
+  "requestFramePermissions": []
+}
