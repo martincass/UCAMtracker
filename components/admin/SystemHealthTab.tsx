@@ -39,19 +39,19 @@ const SystemHealthTab: React.FC<SystemHealthTabProps> = ({ health, isLoading, er
 
   return (
     <div className="bg-white p-6 rounded-lg shadow-lg">
-      <h3 className="text-xl font-semibold text-slate-800 mb-4">System Health Check</h3>
+      <h3 className="text-xl font-semibold text-slate-800 mb-4">Chequeo de Salud del Sistema</h3>
       {isLoading ? (
-        <p className="text-gray-500">Running health checks...</p>
+        <p className="text-gray-500">Ejecutando chequeos de salud...</p>
       ) : error ? (
         <p className="text-red-500">{error}</p>
       ) : health ? (
         <ul className="space-y-4">
-            <HealthCheckItem title="Site URL Configuration" status={health.siteUrl.status} message={health.siteUrl.message} />
-            <HealthCheckItem title="Supabase Auth Redirects" status={health.supabaseRedirects.status} message={health.supabaseRedirects.message} />
-            <HealthCheckItem title="SMTP Service" status={health.smtp.status} message={health.smtp.message} />
+            <HealthCheckItem title="Configuración de URL del Sitio" status={health.siteUrl.status} message={health.siteUrl.message} />
+            <HealthCheckItem title="Redirecciones de Auth de Supabase" status={health.supabaseRedirects.status} message={health.supabaseRedirects.message} />
+            <HealthCheckItem title="Servicio SMTP" status={health.smtp.status} message={health.smtp.message} />
         </ul>
       ) : (
-        <p className="text-gray-500">Could not retrieve system health information.</p>
+        <p className="text-gray-500">No se pudo obtener la información de salud del sistema.</p>
       )}
     </div>
   );

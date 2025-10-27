@@ -1,16 +1,15 @@
-
 import React, { useState } from 'react';
 import { apiService } from '../services/apiService';
-import { User, View } from '../types';
+import { User } from '../types';
 import { EyeIcon, EyeSlashIcon, LockClosedIcon, EnvelopeIcon } from './Icons';
+import { es } from '../locale/es';
 
 interface LoginPageProps {
   onLogin: (user: User) => void;
-  setView: (view: View) => void;
   addNotification: (message: string, type: 'success' | 'error' | 'info') => void;
 }
 
-const LoginPage: React.FC<LoginPageProps> = ({ onLogin, setView, addNotification }) => {
+const LoginPage: React.FC<LoginPageProps> = ({ onLogin, addNotification }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -25,8 +24,9 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, setView, addNotification
       const user = await apiService.login(email, password);
       onLogin(user);
     } catch (err: any) {
-      setError(err.message || 'An unexpected error occurred.');
-      addNotification(err.message || 'Login failed.', 'error');
+      const errorMessage = err.message || es.errorUnexpected;
+      setError(errorMessage);
+      addNotification(errorMessage, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -37,14 +37,8 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, setView, addNotification
       <div className="w-full max-w-md p-8 space-y-8 bg-white rounded-lg shadow-lg">
         <div>
           <h2 className="text-3xl font-bold text-center text-gray-900">
-            Sign in to your account
+            {es.loginTitle}
           </h2>
-          <p className="mt-2 text-center text-sm text-gray-600">
-            Or{' '}
-            <button onClick={() => setView('signup')} className="font-medium text-primary-600 hover:text-primary-500">
-              create a new account
-            </button>
-          </p>
         </div>
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
           <div className="rounded-md shadow-sm -space-y-px">
@@ -59,7 +53,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, setView, addNotification
                 autoComplete="email"
                 required
                 className="appearance-none rounded-none relative block w-full px-3 py-3 pl-10 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
-                placeholder="Email address"
+                placeholder={es.emailPlaceholder}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
@@ -75,7 +69,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, setView, addNotification
                 autoComplete="current-password"
                 required
                 className="appearance-none rounded-none relative block w-full px-3 py-3 pl-10 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
-                placeholder="Password"
+                placeholder={es.passwordPlaceholder}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
@@ -88,26 +82,16 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, setView, addNotification
               </button>
             </div>
           </div>
-
-          <div className="flex items-center justify-end">
-            <div className="text-sm">
-              <button
-                onClick={() => setView('forgot-password')}
-                className="font-medium text-primary-600 hover:text-primary-500"
-              >
-                Forgot your password?
-              </button>
-            </div>
-          </div>
           
           {error && <p className="text-sm text-red-600 text-center">{error}</p>}
+          
           <div>
             <button
               type="submit"
               disabled={isLoading}
               className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:bg-primary-300"
             >
-              {isLoading ? 'Signing in...' : 'Sign in'}
+              {isLoading ? es.loginLoading : es.loginButton}
             </button>
           </div>
         </form>

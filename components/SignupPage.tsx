@@ -39,12 +39,12 @@ const SignupPage: React.FC<SignupPageProps> = ({ setView, addNotification }) => 
     return (
         <div className="flex items-center justify-center">
             <div className="w-full max-w-md p-8 space-y-6 bg-white rounded-lg shadow-lg text-center">
-                 <h2 className="text-2xl font-bold text-gray-900">Check your inbox</h2>
+                 <h2 className="text-2xl font-bold text-gray-900">Revisa tu correo</h2>
                  <p className="text-gray-600">
-                    We've sent a confirmation link to <span className="font-medium text-gray-800">{email}</span>. Please click the link to activate your account.
+                    Hemos enviado un enlace de confirmación a <span className="font-medium text-gray-800">{email}</span>. Por favor, haz clic en el enlace para activar tu cuenta.
                  </p>
                  <button onClick={() => setView('login')} className="font-medium text-primary-600 hover:text-primary-500">
-                    &larr; Back to login
+                    &larr; Volver al inicio de sesión
                  </button>
             </div>
         </div>
@@ -56,16 +56,16 @@ const SignupPage: React.FC<SignupPageProps> = ({ setView, addNotification }) => 
       return (
         <div className="flex items-center justify-center">
             <div className="w-full max-w-md p-8 space-y-6 bg-white rounded-lg shadow-lg text-center">
-                 <h2 className="text-2xl font-bold text-gray-900">Signup Restricted</h2>
+                 <h2 className="text-2xl font-bold text-gray-900">Registro Restringido</h2>
                  <p className="text-gray-600">
-                    Your email <span className="font-medium text-gray-800">{email}</span> isn’t on the access list yet. Please contact your administrator or request access.
+                    Tu correo <span className="font-medium text-gray-800">{email}</span> aún no está en la lista de acceso. Por favor, contacta a tu administrador o solicita acceso.
                  </p>
                  <div className="flex justify-center space-x-4">
                     <button onClick={() => setView('login')} className="font-medium text-slate-600 hover:text-slate-500">
-                        &larr; Back to login
+                        &larr; Volver al inicio de sesión
                     </button>
                     <button onClick={() => setView('request-access')} className="font-medium text-primary-600 hover:text-primary-500">
-                        Request Access &rarr;
+                        Solicitar Acceso &rarr;
                     </button>
                  </div>
             </div>
@@ -78,12 +78,12 @@ const SignupPage: React.FC<SignupPageProps> = ({ setView, addNotification }) => 
       <div className="w-full max-w-md p-8 space-y-8 bg-white rounded-lg shadow-lg">
         <div>
           <h2 className="text-3xl font-bold text-center text-gray-900">
-            Create an account
+            Crear una cuenta
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
-            Already have an account?{' '}
+            ¿Ya tienes una cuenta?{' '}
             <button onClick={() => setView('login')} className="font-medium text-primary-600 hover:text-primary-500">
-              Sign in
+              Iniciar sesión
             </button>
           </p>
         </div>
@@ -100,7 +100,7 @@ const SignupPage: React.FC<SignupPageProps> = ({ setView, addNotification }) => 
                     autoComplete="email"
                     required
                     className="appearance-none rounded-none relative block w-full px-3 py-3 pl-10 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
-                    placeholder="Email address"
+                    placeholder="Dirección de correo"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                  />
@@ -116,7 +116,7 @@ const SignupPage: React.FC<SignupPageProps> = ({ setView, addNotification }) => 
                  autoComplete="new-password"
                  required
                  className="appearance-none rounded-none relative block w-full px-3 py-3 pl-10 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-primary-500 focus:border-primary-500 focus:z-10 sm:text-sm"
-                 placeholder="Password"
+                 placeholder="Contraseña"
                  value={password}
                  onChange={(e) => setPassword(e.target.value)}
                />
@@ -136,7 +136,7 @@ const SignupPage: React.FC<SignupPageProps> = ({ setView, addNotification }) => 
               disabled={isLoading}
               className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:bg-primary-300 disabled:cursor-not-allowed"
             >
-              {isLoading ? 'Creating account...' : 'Sign up'}
+              {isLoading ? 'Creando cuenta...' : 'Registrarse'}
             </button>
           </div>
         </form>

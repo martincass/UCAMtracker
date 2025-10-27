@@ -48,7 +48,7 @@ The application is built with React, TypeScript, and Tailwind CSS, and is design
     Connect to your Supabase project and run the SQL scripts located in `supabase/migrations/` to set up the necessary tables and policies.
 
 5.  **Seed the Admin User:**
-    To create the initial admin account, run the seed script. This will use the `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` from your `.env` file.
+    To create or update the primary admin account (`mcassinelli@gmail.com`), run the seed script. This script ensures the admin user exists with a specific password and correct permissions.
     ```bash
     pnpm seed:admin
     ```
@@ -64,7 +64,7 @@ The application is built with React, TypeScript, and Tailwind CSS, and is design
 -   `pnpm dev`: Starts the development server.
 -   `pnpm build`: Builds the application for production.
 -   `pnpm preview`: Serves the production build locally.
--   `pnpm seed:admin`: Creates the initial admin user in your Supabase instance based on your `.env` configuration. This is idempotent and safe to run multiple times.
+-   `pnpm seed:admin`: Creates or updates the primary admin user (`mcassinelli@gmail.com`) in your Supabase instance. This is idempotent and safe to run multiple times.
 
 ## Environment Variables (.env.example)
 
@@ -79,10 +79,6 @@ VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 
 # Supabase Service Role Key (secret, for admin actions on the backend/scripts)
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
-
-# Initial Admin User Credentials for Seeding
-SEED_ADMIN_EMAIL=admin@example.com
-SEED_ADMIN_PASSWORD=a_strong_password
 
 # Webhook URL for Google Apps Script (for submission notifications)
 GOOGLE_APPS_SCRIPT_WEBHOOK_URL=your_google_apps_script_webhook_url

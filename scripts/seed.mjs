@@ -3,21 +3,23 @@
 // It uses the Supabase Admin API to bypass RLS.
 // Run with: pnpm seed:admin
 
-// FIX: Import `process` module to provide types for `process.exit`, resolving errors at lines 19 and 88.
 import process from 'node:process';
 import { createClient } from '@supabase/supabase-js';
 
 // --- CONFIGURATION ---
-// Note: The seed script runs in Node.js and can access process.env directly.
-// We use VITE_SUPABASE_URL for consistency with the client-side code.
+// Admin credentials are hardcoded to ensure a consistent superuser state.
+const adminEmail = "mcassinelli@gmail.com";
+const adminPassword = "12E4!";
+
+// Supabase credentials are still read from the environment.
 const supabaseUrl = process.env.VITE_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const adminEmail = process.env.SEED_ADMIN_EMAIL;
-const adminPassword = process.env.SEED_ADMIN_PASSWORD;
+
 
 // --- VALIDATION ---
-if (!supabaseUrl || !serviceRoleKey || !adminEmail || !adminPassword) {
-  console.error("🔴 Error: Missing required environment variables. Please check your .env file for VITE_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SEED_ADMIN_EMAIL, and SEED_ADMIN_PASSWORD.");
+if (!supabaseUrl || !serviceRoleKey) {
+  console.error("🔴 Error: Missing required environment variables. Please check your .env file for VITE_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+  // @ts-ignore
   process.exit(1);
 }
 
@@ -40,9 +42,23 @@ async function seedAdmin() {
     let adminUser = users.find(u => u.email === adminEmail);
 
     if (adminUser) {
-      console.log(`🟡 Admin user ${adminEmail} already exists. Skipping user creation.`);
+      console.log(`🟡 Admin user ${adminEmail} already exists. Updating password and ensuring admin role.`);
+      // 2a. Update the existing user's password and metadata
+      const { data, error: updateError } = await supabase.auth.admin.updateUserById(
+        adminUser.id,
+        {
+          password: adminPassword,
+          email_confirm: true,
+          app_metadata: { role: 'admin' },
+          user_metadata: { client_id: 'ADMIN' }
+        }
+      );
+      if (updateError) throw updateError;
+      adminUser = data.user;
+      console.log(`✅ Successfully updated admin user: ${adminUser.email}`);
+
     } else {
-      // 2. Create the user if they don't exist
+      // 2b. Create the user if they don't exist
       const { data, error: createError } = await supabase.auth.admin.createUser({
         email: adminEmail,
         password: adminPassword,
@@ -59,34 +75,25 @@ async function seedAdmin() {
       console.log(`✅ Successfully created admin user: ${adminUser.email}`);
     }
 
-    // 3. Ensure the admin user is on the allowlist
-    const { data: allowlistEntry, error: selectError } = await supabase
+    // 3. Ensure the admin user is on the allowlist (UPSERT logic)
+    const { error: upsertError } = await supabase
       .from('allowlist_clients')
-      .select('id')
-      .eq('email', adminEmail)
-      .maybeSingle();
+      .upsert({
+        email: adminEmail,
+        client_id: 'ADMIN',
+        client_name: 'Admin',
+        active: true,
+      }, { onConflict: 'email' });
 
-    if (selectError) throw selectError;
+    if (upsertError) throw upsertError;
+    console.log(`✅ Successfully ensured admin user is on the allowlist.`);
 
-    if (allowlistEntry) {
-      console.log(`🟡 Admin user ${adminEmail} is already on the allowlist.`);
-    } else {
-      const { error: insertError } = await supabase
-        .from('allowlist_clients')
-        .insert({
-          email: adminEmail,
-          client_id: 'ADMIN',
-          client_name: 'Admin',
-          active: true,
-        });
-      if (insertError) throw insertError;
-      console.log(`✅ Successfully added admin user to the allowlist.`);
-    }
 
     console.log("✨ Seed process completed successfully!");
 
   } catch (error) {
     console.error("🔴 An error occurred during the seed process:", error.message);
+    // @ts-ignore
     process.exit(1);
   }
 }

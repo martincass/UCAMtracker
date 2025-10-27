@@ -1,92 +1,101 @@
+// types.ts
 
-
-export enum Shift {
-  Morning = 'Morning',
-  Afternoon = 'Afternoon',
-  Night = 'Night',
-}
-
-export interface Photo {
-  path: string;
-  url: string;
-}
-
-export interface Submission {
-  id: string;
-  part_id: string;
-  client_id: string;
-  user_id: string;
-  date: string; // YYYY-MM-DD
-  plant: string;
-  shift: Shift;
-  product: string;
-  produced_qty: number;
-  scrap_qty: number;
-  notes: string;
-  photos: Photo[];
-  created_at: string; // ISO 8601
-  created_by: string;
-  status: 'received' | 'processing' | 'completed';
-}
-
-export interface AllowlistClient {
-  id: string;
-  email: string;
-  client_id: string;
-  client_name: string;
-  active: boolean;
-  created_at?: string;
-}
-
+// User object for authenticated users
 export interface User {
   id: string;
   email: string;
-  role: 'client' | 'admin';
-  clientId: string;
-  clientName: string;
-  last_sign_in_at?: string;
-  created_at?: string;
-  must_change_password?: boolean;
-  email_confirmed_at?: string; 
+  role: 'admin' | 'user';
+  client_id: string;
+  client_name: string;
+  mustResetPassword?: boolean;
 }
 
-export type UserStatus = 'ACTIVE' | 'INVITED' | 'CONFIRMATION_SENT' | 'INACTIVE' | 'PENDING_RESET';
+// Defines the current view/page in the application
+export type View =
+  | 'login'
+  | 'signup'
+  | 'dashboard'
+  | 'admin-dashboard'
+  | 'forgot-password'
+  | 'reset-password'
+  | 'request-access'
+  | 'force-reset-password';
 
-// For the admin panel to display a richer user object
-export interface ManagedUser extends User {
-    active_on_allowlist: boolean;
-    status: UserStatus;
-}
-
-export type View = 'login' | 'signup' | 'dashboard' | 'admin' | 'forgot-password' | 'reset-password' | 'force-reset-password' | 'request-access';
-
+// For toast notifications
 export interface ToastNotification {
   id: number;
   message: string;
   type: 'success' | 'error' | 'info';
 }
 
-export interface AdminAuditLog {
-    id: string;
-    actor_user_id: string;
-    action: string;
-    target_email: string | null;
-    payload: Record<string, any>;
-    created_at: string;
+// Status for the signup process
+export type SignupStatus = 'idle' | 'PENDING_REVIEW' | 'CONFIRMATION_SENT';
+
+// Extended user object for admin management
+export interface ManagedUser {
+  id: string;
+  email: string;
+  role: 'admin' | 'user';
+  client_id: string;
+  client_name: string;
+  status: 'active' | 'inactive' | 'pending_reset';
+  last_sign_in_at: string | null;
+  created_at: string;
+  is_confirmed: boolean;
 }
 
+// Response from the admin_create_user edge function
+export interface CreateUserResponse {
+  ok: boolean;
+  user_id: string;
+  email: string;
+  client_id: string;
+  client_name: string;
+  email_sent: boolean;
+  email_error?: string;
+  password?: string;
+}
+
+// Represents a client in the allowlist
+export interface AllowlistClient {
+  id: string;
+  email: string;
+  client_id: string;
+  client_name: string;
+  active: boolean;
+}
+
+// Represents a user's request for access
 export interface AccessRequest {
-    id: string;
-    email: string;
-    company: string;
-    client_id?: string;
-    note: string;
-    created_at: string;
-    status: 'pending' | 'approved' | 'denied';
+  id: string;
+  email: string;
+  company: string;
+  client_id: string | null;
+  note: string;
+  created_at: string;
 }
 
+// Represents the system health check results
 export interface SystemHealth {
-    siteUrl: { status: 'ok' | 'error', message: string };
-    supabaseRedirects: { status: 'ok' | 'error', message: string };
-    smtp: { status: 'ok' | 'warn', message: string };
+  siteUrl: { status: 'ok' | 'warn' | 'error'; message: string };
+  supabaseRedirects: { status: 'ok' | 'warn' | 'error'; message: string };
+  smtp: { status: 'ok' | 'warn' | 'error'; message: string };
+}
+
+// Represents a single production submission record, matching the new `submissions_view`
+export interface Submission {
+  id: string;
+  user_id: string;
+  client_id: string;
+  client_name: string;
+  email: string;
+  date: string;
+  plant: string;
+  part_id: string;
+  weighing_kg: number;
+  notes: string | null;
+  ingress_photo_url: string | null;
+  weighing_photo_url: string | null;
+  status: 'pendiente' | 'validado' | 'rechazado';
+  created_at: string;
 }

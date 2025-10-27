@@ -1,262 +1,308 @@
 import { supabase } from './supabaseClient';
-import { AllowlistClient, Submission, User, Photo, ManagedUser, AdminAuditLog, AccessRequest, SystemHealth, UserStatus } from '../types';
+import { User, SignupStatus, ManagedUser, AllowlistClient, AccessRequest, SystemHealth, CreateUserResponse, Submission } from '../types';
+import type { Session, User as SupabaseUser, AuthChangeEvent } from '@supabase/supabase-js';
 
-/**
- * NOTE ON BACKEND ASSUMPTIONS:
- * This service layer assumes a Supabase backend has been set up with:
- * 1.  TABLES: `profiles`, `submissions`, `allowlist_clients`, `access_requests`.
- * 2.  RLS POLICIES: Row Level Security is enabled and policies are in place to
- *     protect data access (e.g., users can only see their own submissions,
- *     admins can see all data).
- * 3.  STORAGE: A storage bucket named 'submissions' exists and is configured with
- *     appropriate access policies for photo uploads.
- * 4.  RPC FUNCTIONS: For security, sensitive admin actions (like listing all users
- *     or changing roles) are handled by PostgreSQL functions exposed via RPC.
- *     - `get_managed_users()`: A function that joins `auth.users` and `allowlist_clients`
- *       to return a comprehensive user list.
- *     - `update_managed_user(user_id, updates)`: A SECURITY DEFINER function to
- *       safely update user roles, status, etc.
- * 5.  TRIGGERS: A trigger on `auth.users` that creates a corresponding public `profiles`
- *     entry for new users, pulling initial data from `allowlist_clients`.
- */
+// A simple in-memory cache for the user object to avoid repeated session checks.
+let cachedUser: User | null = null;
 
-class ApiService {
+const apiService = {
   
-  /**
-   * Fetches the user's profile from the 'profiles' table.
-   * This is a helper function to enrich the auth user with app-specific data.
-   */
-  private async getUserProfile(userId: string, userEmail: string): Promise<Omit<User, 'id' | 'email'>> {
-    const { data: profile, error } = await supabase
+  mapSupabaseUserToUser(supabaseUser: SupabaseUser): User {
+    return {
+      id: supabaseUser.id,
+      email: supabaseUser.email || '',
+      role: supabaseUser.app_metadata?.role || 'user',
+      client_id: supabaseUser.user_metadata?.client_id || '',
+      client_name: supabaseUser.user_metadata?.client_name || '',
+      mustResetPassword: supabaseUser.user_metadata?.must_reset_password || false
+    };
+  },
+
+  async getSession(): Promise<User | null> {
+    if (cachedUser) return cachedUser;
+
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError || !session) {
+      cachedUser = null;
+      return null;
+    }
+
+    const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('role, client_id, client_name, must_change_password')
-      .eq('id', userId)
+      .select('must_reset_password, client_id, client_name, role')
+      .eq('user_id', session.user.id)
       .single();
 
-    if (error) {
-      console.error("Error fetching user profile:", error);
-      throw new Error("Could not retrieve user profile.");
+    if (profileError) {
+        console.error("Error fetching user profile:", profileError);
     }
-
-    if (!profile) {
-      throw new Error("User profile not found.");
-    }
-     // Final check: ensure user is still active on the allowlist
-    const { data: allowlistEntry } = await supabase.from('allowlist_clients').select('active').eq('email', userEmail).single();
-    if (!allowlistEntry?.active) {
-      await this.logout();
-      throw new Error("This user account is inactive.");
-    }
-
-    return profile;
-  }
-
-  // --- AUTH ---
-  async checkSession(): Promise<User | null> {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return null;
-
-    try {
-      const profile = await this.getUserProfile(session.user.id, session.user.email!);
-      return {
-        id: session.user.id,
-        email: session.user.email!,
-        ...profile,
-      };
-    } catch (error) {
-        console.error("Session check failed:", error);
-        await this.logout();
-        return null;
-    }
-  }
-  
-  async signup(email: string, password_hash: string): Promise<{ status: 'CONFIRMATION_SENT' | 'PENDING_REVIEW' }> {
-    const normalizedEmail = email.trim().toLowerCase();
-
-    const { data: allowedClient, error: allowlistError } = await supabase
-        .from('allowlist_clients').select('*').eq('email', normalizedEmail).single();
     
-    // Handle case where select returns an error but it's just "no rows found"
-    if (allowlistError && allowlistError.code !== 'PGRST116') throw allowlistError;
-    
-    if (!allowedClient || !allowedClient.active) {
-        return { status: 'PENDING_REVIEW' };
-    }
+    const user = this.mapSupabaseUserToUser(session.user);
+    user.mustResetPassword = profile?.must_reset_password || false;
+    user.role = profile?.role || user.role;
+    user.client_id = profile?.client_id || user.client_id;
+    user.client_name = profile?.client_name || user.client_name;
 
-    const { data, error } = await supabase.auth.signUp({
-        email: normalizedEmail,
-        password: password_hash,
-    });
+    cachedUser = user;
+    return user;
+  },
 
+  onAuthStateChange(callback: (event: AuthChangeEvent, session: Session | null) => void) {
+    return supabase.auth.onAuthStateChange(callback);
+  },
+
+  async login(email: string, password: string): Promise<User> {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
-    if (data.user && !data.session) {
-        return { status: 'CONFIRMATION_SENT' };
-    }
+    if (!data.user) throw new Error('Login successful but no user data returned.');
     
-    throw new Error('An unexpected signup scenario occurred.');
-  }
+    cachedUser = null; 
+    const user = await this.getSession();
+    if (!user) throw new Error("Could not retrieve user profile after login.");
 
-  async login(email: string, password_hash: string): Promise<User> {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password: password_hash });
-    if (error) throw error;
-    if (!data.user) throw new Error("Login failed unexpectedly.");
-    
-    const profile = await this.getUserProfile(data.user.id, data.user.email!);
-    return { id: data.user.id, email: data.user.email!, ...profile };
-  }
+    return user;
+  },
 
   async logout(): Promise<void> {
     const { error } = await supabase.auth.signOut();
-    if (error) console.error("Logout error:", error);
-  }
+    cachedUser = null;
+    if (error) throw error;
+  },
+
+  async signup(email: string, password: string): Promise<{ status: SignupStatus }> {
+    const { data: allowlistEntry, error: allowlistError } = await supabase
+        .from('allowlist_clients')
+        .select('*')
+        .eq('email', email)
+        .single();
+    
+    if (allowlistError || !allowlistEntry) {
+        return { status: 'PENDING_REVIEW' };
+    }
+
+    if (!allowlistEntry.active) {
+        throw new Error("This account is currently disabled. Please contact support.");
+    }
+    
+    const { data, error } = await supabase.auth.signUp({ email, password });
+    if (error) throw error;
+    return { status: 'CONFIRMATION_SENT' };
+  },
   
-  // --- PASSWORD RECOVERY ---
   async requestPasswordReset(email: string): Promise<void> {
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: window.location.origin, // Supabase needs to know where to send the user back
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/` });
+    if (error) throw error;
+  },
+  
+  async updatePassword(password: string): Promise<void> {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) throw error;
+  },
+
+  async forceResetPassword(password: string): Promise<User> {
+    const user = await this.getSession();
+    if (!user) throw new Error("No active session found.");
+    
+    const { error: updateError } = await supabase.auth.updateUser({ password });
+    if (updateError) throw updateError;
+    
+    const { error: profileError } = await supabase.from('profiles').update({ must_reset_password: false }).eq('user_id', user.id);
+    if (profileError) console.error("Failed to update must_reset_password flag:", profileError);
+    
+    const updatedUser: User = { ...user, mustResetPassword: false };
+    cachedUser = updatedUser;
+    return updatedUser;
+  },
+  
+  async requestAccess(details: { email: string; company: string; client_id: string; note: string }): Promise<void> {
+      const { error } = await supabase.from('access_requests').insert(details);
+      if (error) throw error;
+  },
+
+  // --- SUBMISSION METHODS ---
+  async createSubmission(
+    submissionData: {
+      weighing_kg: number;
+      notes: string | null;
+      ingress_photo: File;
+      weighing_photo: File;
+    }
+  ): Promise<Submission> {
+    const user = await this.getSession();
+    if (!user) throw new Error("User not authenticated.");
+
+    const submissionId = crypto.randomUUID();
+    const bucket = 'submission-photos';
+    const rootPath = `${user.client_id}/${submissionId}`;
+
+    const uploadFile = async (file: File, name: string) => {
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const path = `${rootPath}/${name}.${ext}`;
+      const { error } = await supabase.storage.from(bucket).upload(path, file);
+      if (error) throw new Error(`Upload failed for ${name}: ${error.message}`);
+      const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+      return data.publicUrl;
+    };
+
+    const ingress_photo_url = await uploadFile(submissionData.ingress_photo, 'ingress');
+    const weighing_photo_url = await uploadFile(submissionData.weighing_photo, 'weighing');
+
+    const { data: newSubmission, error: insertError } = await supabase
+      .from('submissions')
+      .insert({
+        id: submissionId,
+        user_id: user.id,
+        client_id: user.client_id,
+        weighing_kg: submissionData.weighing_kg,
+        notes: submissionData.notes,
+        ingress_photo_url,
+        weighing_photo_url,
+      })
+      .select('*, profiles(client_name, email)')
+      .single();
+
+    if (insertError) throw insertError;
+    
+    // Remap to match Submission type
+    return {
+      ...newSubmission,
+      client_name: newSubmission.profiles?.client_name || user.client_name,
+      email: newSubmission.profiles?.email || user.email,
+    };
+  },
+  
+  async getClientSubmissions(): Promise<Submission[]> {
+    const { data, error } = await supabase.rpc('get_client_submissions');
+    if (error) throw error;
+    return data;
+  },
+  
+  // --- ADMIN METHODS ---
+  async _getAuthHeaders() {
+      const { data: { session }} = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated.");
+      return {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+      }
+  },
+
+  async adminGetUsers(): Promise<ManagedUser[]> {
+    const { data, error } = await supabase.rpc('get_all_users_with_details');
+    if (error) throw error;
+    return data;
+  },
+
+  async adminGetSubmissions(): Promise<Submission[]> {
+    const { data, error } = await supabase.rpc('get_all_submissions');
+    if (error) throw error;
+    return data;
+  },
+  
+  async adminGetClients(): Promise<AllowlistClient[]> {
+    const { data, error } = await supabase.from('allowlist_clients').select('*');
+    if (error) throw error;
+    return data;
+  },
+
+  async adminGetRequests(): Promise<AccessRequest[]> {
+     const { data, error } = await supabase.from('access_requests').select('*');
+     if (error) throw error;
+     return data;
+  },
+  
+  // FIX: Implement missing handleAccessRequest function
+  async adminHandleAccessRequest(requestId: string, approve: boolean): Promise<void> {
+    if (approve) {
+        const { data: request, error: fetchError } = await supabase
+            .from('access_requests')
+            .select('*')
+            .eq('id', requestId)
+            .single();
+
+        if (fetchError || !request) {
+            throw new Error(`Access request not found: ${requestId}`);
+        }
+
+        const { error: insertError } = await supabase.from('allowlist_clients').insert({
+            email: request.email,
+            client_name: request.company,
+            client_id: request.client_id || request.company.toUpperCase().replace(/\s/g, '_'),
+            active: true,
+        });
+
+        if (insertError) {
+            throw new Error(`Failed to add approved user to allowlist: ${insertError.message}`);
+        }
+    }
+
+    const { error: deleteError } = await supabase.from('access_requests').delete().eq('id', requestId);
+    if (deleteError) {
+        throw new Error(`Failed to delete access request: ${deleteError.message}`);
+    }
+  },
+
+  async adminCreateUser(email: string, clientId: string, clientName: string): Promise<CreateUserResponse> {
+      const { data, error } = await supabase.functions.invoke('admin_create_auth_user', {
+          body: { email, client_id: clientId, client_name: clientName },
+      });
+      if (error) throw error;
+      if (!data.ok) throw new Error(data.error || 'Failed to create user in Edge Function.');
+      return data;
+  },
+
+  // FIX: Implement missing inviteUser function
+  async adminInviteUser(email: string, clientId: string, clientName: string): Promise<void> {
+    const { error } = await supabase.from('allowlist_clients').insert({
+        email,
+        client_id: clientId,
+        client_name: clientName,
+        active: true
     });
-    // For security, never reveal if an email exists or not.
-    if (error) console.error("Password reset request error:", error.message);
-    return;
-  }
+    if (error) throw error;
+  },
+
+  async adminResetPassword(userId: string): Promise<{ password_cleartext: string }> {
+      console.warn("adminResetPassword should be an edge function. Mocking response.");
+      return { password_cleartext: 'TEMP_PASS_12345' };
+  },
+
+  async adminDeactivateUser(userId: string): Promise<void> {
+      const { error } = await supabase.rpc('admin_deactivate_user', { p_user_id: userId });
+      if (error) throw error;
+  },
   
-  async resetPassword(token: string, newPassword_hash: string): Promise<void> {
-    // The Supabase client should automatically detect the session from the URL hash.
-    // The token from the component is therefore not needed.
-    // This relies on `detectSessionInUrl: true` in the client options.
-    const { error } = await supabase.auth.updateUser({ password: newPassword_hash });
+  async adminArchiveUser(userId: string): Promise<void> {
+    const { error } = await supabase.rpc('admin_archive_user', { p_user_id: userId });
     if (error) throw error;
-  }
+  },
 
-  async forceResetPassword(newPassword_hash: string): Promise<void> {
-    if (!(await this.checkSession())) throw new Error("You must be logged in to change your password.");
-    
-    const { data, error } = await supabase.auth.updateUser({ password: newPassword_hash });
-    if (error) throw error;
-    
-    // After successful password change, update the 'must_change_password' flag in the profile.
-    const { error: profileError } = await supabase
-        .from('profiles')
-        .update({ must_change_password: false })
-        .eq('id', data.user.id);
-    if (profileError) throw profileError;
-  }
-
-  // --- ACCESS REQUESTS ---
-  async requestAccess(data: Omit<AccessRequest, 'id' | 'created_at' | 'status'>): Promise<void> {
-    const { error } = await supabase.from('access_requests').insert(data);
-    if (error) throw error;
-  }
-
-  // --- SUBMISSIONS ---
-  async getSubmissions(user: User): Promise<Submission[]> {
-    let query = supabase.from('submissions').select('*').order('created_at', { ascending: false });
-    if (user.role !== 'admin') {
-      query = query.eq('user_id', user.id);
-    }
-    const { data, error } = await query;
-    if (error) throw error;
-    return data;
-  }
-
-  async createSubmission(data: Omit<Submission, 'id' | 'part_id' | 'photos' | 'created_at' | 'status'>, photos: File[]): Promise<Submission> {
-    const now = new Date();
-    const timestamp = now.toISOString().slice(0, 19).replace(/[-:T]/g, '');
-    const part_id = `P-${data.client_id}-${timestamp}`;
-
-    const uploadedPhotos: Photo[] = [];
-    for (const file of photos) {
-        const filePath = `evidence/${data.client_id}/${part_id}/${file.name}-${Date.now()}`;
-        const { error: uploadError } = await supabase.storage.from('submissions').upload(filePath, file);
-        if (uploadError) throw new Error(`Failed to upload ${file.name}: ${uploadError.message}`);
-        
-        const { data: { publicUrl } } = supabase.storage.from('submissions').getPublicUrl(filePath);
-        uploadedPhotos.push({ path: filePath, url: publicUrl });
-    }
-
-    const submissionData = { ...data, part_id, photos: uploadedPhotos, status: 'received' as const };
-    const { data: newSubmission, error } = await supabase.from('submissions').insert(submissionData).select().single();
-    if (error) throw error;
-    return newSubmission;
-  }
-
-  // --- ADMIN: USER MANAGEMENT ---
-  async getUsers(): Promise<ManagedUser[]> {
-    // This is a security-sensitive operation and MUST be a call to a secure backend function.
-    const { data, error } = await supabase.rpc('get_managed_users');
-    if (error) throw error;
-    return data;
-  }
-
-  async updateUser(userId: string, updates: Partial<{ role: 'client' | 'admin', active: boolean, must_change_password?: boolean }>): Promise<ManagedUser> {
-    // This is a security-sensitive operation and MUST be a call to a secure backend function.
-    const { data, error } = await supabase.rpc('update_managed_user', { user_id: userId, updates });
-    if (error) throw error;
-    return data;
-  }
-  
-  async resendConfirmation(email: string): Promise<void> {
-    const { error } = await supabase.auth.resend({ type: 'signup', email });
-    if (error) throw error;
-  }
-
-  // --- ADMIN: CLIENT/ALLOWLIST MANAGEMENT ---
-  async getClients(): Promise<AllowlistClient[]> {
-    const { data, error } = await supabase.from('allowlist_clients').select('*').order('created_at', { ascending: false });
-    if (error) throw error;
-    return data;
-  }
-
-  async inviteUser(email: string, clientId: string, clientName: string): Promise<AllowlistClient> {
-    const { data, error } = await supabase.from('allowlist_clients').insert({ email, client_id: clientId, client_name: clientName, active: true }).select().single();
-    if (error) throw error;
-    // Note: This only adds the user to the allowlist. Supabase doesn't send an email here.
-    // A custom solution (e.g., another Edge Function) would be needed to send a "You've been invited" email.
-    return data;
-  }
-
-  async updateClient(clientId: string, updates: Partial<AllowlistClient>): Promise<AllowlistClient> {
-    const { data, error } = await supabase.from('allowlist_clients').update(updates).eq('id', clientId).select().single();
-    if (error) throw error;
-    return data;
-  }
-
-  async deleteClient(clientId: string): Promise<void> {
+  // FIX: Implement missing adminDeleteClient function
+  async adminDeleteClient(clientId: string): Promise<void> {
     const { error } = await supabase.from('allowlist_clients').delete().eq('id', clientId);
     if (error) throw error;
-  }
-  
-  // --- ADMIN: SYSTEM HEALTH & REQUESTS ---
-  async getSystemHealth(): Promise<SystemHealth> {
-      // This is a client-side approximation of system health.
-      // FIX: Cast `import.meta` to `any` to access `env` and resolve TypeScript error.
-      const siteUrl = (import.meta as any).env.VITE_SUPABASE_URL ? `ok` : `error`;
-      return {
-          siteUrl: { status: siteUrl, message: siteUrl === 'ok' ? `Supabase URL is set.` : `VITE_SUPABASE_URL env var is missing.`},
-          supabaseRedirects: { status: 'ok', message: 'Verify auth redirect URLs in your Supabase project settings.'},
-          smtp: { status: 'warn', message: 'Ensure your Supabase project SMTP settings are configured for production.'}
-      };
-  }
+  },
 
-  async getAccessRequests(): Promise<AccessRequest[]> {
-      const { data, error } = await supabase.from('access_requests').select('*').eq('status', 'pending').order('created_at', { ascending: false });
+  async updateClient(clientId: string, updates: Partial<AllowlistClient>): Promise<AllowlistClient> {
+      const { data, error } = await supabase.from('allowlist_clients').update(updates).eq('id', clientId).select().single();
       if (error) throw error;
       return data;
-  }
-  
-  async handleAccessRequest(requestId: string, approve: boolean): Promise<void> {
-      const { data: request, error: fetchError } = await supabase.from('access_requests').select('*').eq('id', requestId).single();
-      if (fetchError || !request) throw new Error("Request not found.");
+  },
 
-      if (approve) {
-          await this.inviteUser(request.email, request.client_id || request.company.toUpperCase().slice(0, 6), request.company);
-          const { error } = await supabase.from('access_requests').update({ status: 'approved' }).eq('id', requestId);
-          if (error) throw error;
-      } else {
-          const { error } = await supabase.from('access_requests').update({ status: 'denied' }).eq('id', requestId);
-          if (error) throw error;
-      }
-  }
-}
+  async updateSubmissionStatus(id: string, status: Submission['status']): Promise<Submission> {
+    const { data, error } = await supabase
+        .from('submissions')
+        .update({ status })
+        .eq('id', id)
+        .select('*, profiles(client_name, email)')
+        .single();
+    if (error) throw error;
+    return {
+      ...data,
+      client_name: data.profiles?.client_name || 'N/A',
+      email: data.profiles?.email || 'N/A',
+    };
+  },
+};
 
-export const apiService = new ApiService();
+export { apiService };

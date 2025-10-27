@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { ManagedUser, UserStatus } from '../../types';
+import { ManagedUser, CreateUserResponse } from '../../types';
 import { apiService } from '../../services/apiService';
-import InviteUserModal from './InviteUserModal';
-import { UserPlusIcon, ArrowPathIcon, PaperAirplaneIcon } from '../Icons';
+import { es } from '../../locale/es';
+import { UserPlusIcon, ArrowPathIcon, ExclamationTriangleIcon, TrashIcon } from '../Icons';
+import CreateUserModal from './CreateUserModal';
+import ResetPasswordModal from './ResetPasswordModal';
 
 interface UsersTabProps {
   users: ManagedUser[];
@@ -10,128 +12,150 @@ interface UsersTabProps {
   isLoading: boolean;
   error: string | null;
   addNotification: (message: string, type: 'success' | 'error' | 'info') => void;
-  refreshUsers: () => void;
+  refreshUsers: () => Promise<void>;
 }
 
 const UsersTab: React.FC<UsersTabProps> = ({ users, setUsers, isLoading, error, addNotification, refreshUsers }) => {
-  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<ManagedUser | null>(null);
+  const [actionInProgress, setActionInProgress] = useState<string | null>(null);
 
-  const handleToggleActive = async (user: ManagedUser) => {
-    try {
-      const updatedUser = await apiService.updateUser(user.id, { active: !user.active_on_allowlist });
-      setUsers(prev => prev.map(u => (u.id === user.id ? updatedUser : u)));
-      addNotification(`User ${user.email} has been ${updatedUser.active_on_allowlist ? 'activated' : 'deactivated'}.`, 'success');
-    } catch(err: any) {
-        addNotification(err.message, 'error');
-    }
+  const handleCreateSuccess = (data: CreateUserResponse) => {
+    const newUser: ManagedUser = {
+      id: data.user_id,
+      email: data.email,
+      role: 'user',
+      client_id: data.client_id,
+      client_name: data.client_name,
+      status: 'active',
+      last_sign_in_at: null,
+      created_at: new Date().toISOString(),
+      is_confirmed: true,
+    };
+    setUsers(prev => [newUser, ...prev]);
+    refreshUsers().catch(err => {
+        console.error("Background refetch failed:", err);
+        addNotification('No se pudo refrescar la lista de usuarios.', 'error');
+    });
   };
 
-  const handleToggleAdmin = async (user: ManagedUser) => {
-    const newRole = user.role === 'admin' ? 'client' : 'admin';
+  const handleDeactivateUser = async (user: ManagedUser) => {
+    if (actionInProgress) return;
+    if (!window.confirm(`¿Estás seguro de que quieres desactivar al usuario ${user.email}? No podrán iniciar sesión.`)) return;
+    
+    setActionInProgress(user.id);
     try {
-        const updatedUser = await apiService.updateUser(user.id, { role: newRole });
-        setUsers(prev => prev.map(u => u.id === user.id ? updatedUser : u));
-        addNotification(`User ${user.email} role set to ${newRole}.`, 'success');
-    } catch(err: any) {
-        addNotification(err.message, 'error');
+      await apiService.adminDeactivateUser(user.id);
+      setUsers(prev => prev.map(u => u.id === user.id ? { ...u, status: 'inactive' } : u));
+      addNotification(`Usuario ${user.email} desactivado.`, 'success');
+    } catch (err: any) {
+      addNotification(`Error al desactivar: ${err.message}`, 'error');
+    } finally {
+      setActionInProgress(null);
     }
   };
   
-  const handleResendConfirmation = async (user: ManagedUser) => {
-      try {
-          await apiService.resendConfirmation(user.email);
-          addNotification(`Confirmation email resent to ${user.email}.`, 'success');
-      } catch(err: any) {
-          addNotification(err.message, 'error');
-      }
-  };
-
-  const handleForceReset = async (user: ManagedUser) => {
-    if (window.confirm(`Are you sure you want to force a password reset for ${user.email}? This will send them an email directing them to the password reset page.`)) {
-        try {
-            const updatedUser = await apiService.updateUser(user.id, { must_change_password: true });
-            setUsers(prev => prev.map(u => u.id === user.id ? updatedUser : u));
-            addNotification(`Password reset has been forced for ${user.email}.`, 'success');
-        } catch(err: any) {
-            addNotification(err.message, 'error');
-        }
+  const handleArchiveUser = async (user: ManagedUser) => {
+    if (actionInProgress) return;
+  
+    if (!window.confirm('Este usuario será ocultado de la lista. ¿Continuar?')) {
+      return;
+    }
+  
+    setActionInProgress(user.id);
+    try {
+      await apiService.adminArchiveUser(user.id);
+      addNotification(`Usuario ${user.email} archivado.`, 'success');
+      await refreshUsers(); // Re-fetch to update the list
+    } catch (err: any) {
+      addNotification(`Error al archivar: ${err.message}`, 'error');
+    } finally {
+      setActionInProgress(null);
     }
   };
 
-  const UserStatusBadge: React.FC<{status: UserStatus}> = ({ status }) => {
-    const styles: Record<UserStatus, string> = {
-        ACTIVE: "bg-green-100 text-green-800",
-        INACTIVE: "bg-red-100 text-red-800",
-        PENDING_RESET: "bg-yellow-100 text-yellow-800",
-        CONFIRMATION_SENT: "bg-blue-100 text-blue-800",
-        INVITED: "bg-gray-100 text-gray-800",
-    };
-    const text: Record<UserStatus, string> = {
-        ACTIVE: "Active",
-        INACTIVE: "Inactive",
-        PENDING_RESET: "Pending Reset",
-        CONFIRMATION_SENT: "Pending Confirmation",
-        INVITED: "Invited",
-    };
-    return <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${styles[status]}`}>{text[status]}</span>;
+  const openResetPasswordModal = (user: ManagedUser) => {
+    setSelectedUser(user);
+    setIsResetModalOpen(true);
   };
+  
+  const getStatusBadge = (status: ManagedUser['status']) => {
+    if (status === 'inactive') {
+        return <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">{es.statusInactive}</span>;
+    }
+    switch (status) {
+      case 'active':
+        return <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">{es.statusActive}</span>;
+      case 'pending_reset':
+        return <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">{es.statusPendingReset}</span>;
+      default:
+        return <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">{status}</span>;
+    }
+  };
+  
+  const isArchived = (user: ManagedUser) => user.status === 'inactive';
 
   return (
     <div className="bg-white p-6 rounded-lg shadow-lg">
-      <div className="flex justify-between items-center mb-4">
-        <h3 className="text-xl font-semibold text-slate-800">Manage Users</h3>
-        <button
-          onClick={() => setIsInviteModalOpen(true)}
-          className="inline-flex items-center justify-center rounded-md border border-transparent bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
-        >
-          <UserPlusIcon className="-ml-1 mr-2 h-5 w-5" />
-          Invite User
-        </button>
+      <div className="sm:flex sm:justify-between sm:items-center mb-4">
+        <h3 className="text-xl font-semibold text-slate-800">{es.manageUsersTitle}</h3>
+        <div className="flex space-x-2 mt-2 sm:mt-0">
+          <button onClick={refreshUsers} disabled={isLoading} className="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-50">
+            <ArrowPathIcon className={`h-5 w-5 ${isLoading ? 'animate-spin' : ''}`} />
+          </button>
+          <button onClick={() => setIsCreateModalOpen(true)} className="inline-flex items-center justify-center rounded-md border border-transparent bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700">
+            <UserPlusIcon className="-ml-1 mr-2 h-5 w-5" />
+            {es.createUserButton}
+          </button>
+        </div>
       </div>
-
-      {isInviteModalOpen && <InviteUserModal setIsOpen={setIsInviteModalOpen} addNotification={addNotification} onInviteSuccess={refreshUsers} />}
-
+      
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
-              <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Email</th>
-              <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Client</th>
-              <th scope="col" className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Status</th>
-              <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Sign In</th>
-              <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+              <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colEmail}</th>
+              <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colClient}</th>
+              <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colLastSignIn}</th>
+              <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colStatus}</th>
+              <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colActions}</th>
             </tr>
           </thead>
           <tbody>
-            {isLoading ? (
-              <tr><td colSpan={5} className="text-center p-6 text-gray-500">Loading users...</td></tr>
+            {isLoading && users.length === 0 ? (
+              <tr><td colSpan={5} className="text-center p-6 text-gray-500">{es.loadingUsers}</td></tr>
             ) : error ? (
               <tr><td colSpan={5} className="text-center p-6 text-red-500">{error}</td></tr>
             ) : users.length > 0 ? (
               users.map(user => (
-                <tr key={user.id} className="even:bg-white odd:bg-slate-50">
-                  <td className="px-4 py-3 font-medium text-gray-900">{user.email}{user.role === 'admin' && <span className="ml-2 text-xs font-bold text-purple-600">(Admin)</span>}</td>
-                  <td className="px-4 py-3 text-gray-500">{user.clientName} ({user.clientId})</td>
-                  <td className="px-4 py-3 text-center"><UserStatusBadge status={user.status} /></td>
-                  <td className="px-4 py-3 text-gray-500">{user.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleString() : 'Never'}</td>
-                  <td className="px-4 py-3 text-sm font-medium">
-                    <div className='flex items-center space-x-2'>
-                        {user.status === 'CONFIRMATION_SENT' && (
-                             <button onClick={() => handleResendConfirmation(user)} className="text-blue-600 hover:text-blue-900 p-1" title="Resend Confirmation"><PaperAirplaneIcon className="h-5 w-5"/></button>
-                        )}
-                        <button onClick={() => handleToggleAdmin(user)} className="text-primary-600 hover:text-primary-900" title={user.role === 'admin' ? 'Demote to Client' : 'Promote to Admin'}>{user.role === 'admin' ? 'Demote' : 'Promote'}</button>
-                        <button onClick={() => handleToggleActive(user)} className={user.active_on_allowlist ? "text-red-600 hover:text-red-900" : "text-green-600 hover:text-green-900"} title={user.active_on_allowlist ? 'Deactivate User' : 'Activate User'}>{user.active_on_allowlist ? 'Deactivate' : 'Activate'}</button>
-                         <button onClick={() => handleForceReset(user)} className="text-yellow-600 hover:text-yellow-900 p-1" title="Force Password Reset"><ArrowPathIcon className="h-5 w-5" /></button>
-                    </div>
+                <tr key={user.id} className={`even:bg-white odd:bg-slate-50 ${isArchived(user) ? 'opacity-50' : ''}`}>
+                  <td className="px-4 py-3 font-medium text-gray-900">{user.email}</td>
+                  <td className="px-4 py-3 text-gray-500">{user.client_name} ({user.client_id})</td>
+                  <td className="px-4 py-3 text-gray-500">{user.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleString() : es.never}</td>
+                  <td className="px-4 py-3">{getStatusBadge(user.status)}</td>
+                  <td className="px-4 py-3 text-sm font-medium space-x-2">
+                    <button onClick={() => openResetPasswordModal(user)} title={es.resetPassword} disabled={actionInProgress === user.id || isArchived(user)} className="text-gray-500 hover:text-primary-600 disabled:opacity-30 disabled:cursor-not-allowed">
+                        <ArrowPathIcon className="h-5 w-5" />
+                    </button>
+                    <button onClick={() => handleDeactivateUser(user)} title={es.deactivate} disabled={actionInProgress === user.id || isArchived(user)} className="text-yellow-600 hover:text-yellow-800 disabled:opacity-30 disabled:cursor-not-allowed">
+                        <ExclamationTriangleIcon className="h-5 w-5" />
+                    </button>
+                    <button onClick={() => handleArchiveUser(user)} title="Archivar Usuario" disabled={actionInProgress === user.id} className="text-red-600 hover:text-red-800 disabled:opacity-30 disabled:cursor-not-allowed">
+                        <TrashIcon className="h-5 w-5" />
+                    </button>
                   </td>
                 </tr>
               ))
             ) : (
-              <tr><td colSpan={5} className="text-center p-6 text-gray-500">No users found.</td></tr>
+              <tr><td colSpan={5} className="text-center p-6 text-gray-500">{es.noUsersFound}</td></tr>
             )}
           </tbody>
         </table>
       </div>
+      
+      {isCreateModalOpen && <CreateUserModal setIsOpen={setIsCreateModalOpen} addNotification={addNotification} onCreateSuccess={handleCreateSuccess} />}
+      {isResetModalOpen && selectedUser && <ResetPasswordModal user={selectedUser} setIsOpen={setIsResetModalOpen} addNotification={addNotification} />}
     </div>
   );
 };

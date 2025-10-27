@@ -18,7 +18,7 @@ const ForgotPasswordPage: React.FC<ForgotPasswordPageProps> = ({ setView, addNot
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isBotProtected) {
-        addNotification("Please confirm you are not a robot.", "error");
+        addNotification("Por favor, confirma que no eres un robot.", "error");
         return;
     }
     setIsLoading(true);
@@ -40,12 +40,12 @@ const ForgotPasswordPage: React.FC<ForgotPasswordPageProps> = ({ setView, addNot
     return (
         <div className="flex items-center justify-center">
             <div className="w-full max-w-md p-8 space-y-6 bg-white rounded-lg shadow-lg text-center">
-                 <h2 className="text-2xl font-bold text-gray-900">Check your email</h2>
+                 <h2 className="text-2xl font-bold text-gray-900">Revisa tu correo</h2>
                  <p className="text-gray-600">
-                    If an account exists for <span className="font-medium text-gray-800">{email}</span>, you will receive an email with instructions on how to reset your password.
+                    Si existe una cuenta para <span className="font-medium text-gray-800">{email}</span>, recibirás un correo electrónico con instrucciones sobre cómo restablecer tu contraseña.
                  </p>
                  <button onClick={() => setView('login')} className="font-medium text-primary-600 hover:text-primary-500">
-                    &larr; Back to login
+                    &larr; Volver al inicio de sesión
                  </button>
             </div>
         </div>
@@ -57,10 +57,10 @@ const ForgotPasswordPage: React.FC<ForgotPasswordPageProps> = ({ setView, addNot
       <div className="w-full max-w-md p-8 space-y-8 bg-white rounded-lg shadow-lg">
         <div>
           <h2 className="text-3xl font-bold text-center text-gray-900">
-            Forgot Password
+            ¿Olvidaste tu contraseña?
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
-            Enter your email and we'll send you a link to get back into your account.
+            Ingresa tu correo y te enviaremos un enlace para recuperar tu cuenta.
           </p>
         </div>
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
@@ -75,7 +75,7 @@ const ForgotPasswordPage: React.FC<ForgotPasswordPageProps> = ({ setView, addNot
                autoComplete="email"
                required
                className="appearance-none rounded-md relative block w-full px-3 py-3 pl-10 border border-gray-300 placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-               placeholder="Email address"
+               placeholder="Dirección de correo"
                value={email}
                onChange={(e) => setEmail(e.target.value)}
              />
@@ -91,7 +91,7 @@ const ForgotPasswordPage: React.FC<ForgotPasswordPageProps> = ({ setView, addNot
                     className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
                 />
                 <label htmlFor="bot-protection" className="ml-2 block text-sm text-gray-900">
-                    I am not a robot (placeholder for hCaptcha)
+                    No soy un robot (placeholder para hCaptcha)
                 </label>
             </div>
 
@@ -101,12 +101,12 @@ const ForgotPasswordPage: React.FC<ForgotPasswordPageProps> = ({ setView, addNot
               disabled={isLoading || !isBotProtected}
               className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:bg-primary-300"
             >
-              {isLoading ? 'Sending...' : 'Send Recovery Email'}
+              {isLoading ? 'Enviando...' : 'Enviar correo de recuperación'}
             </button>
           </div>
            <p className="mt-4 text-center text-sm">
              <button onClick={() => setView('login')} className="font-medium text-primary-600 hover:text-primary-500">
-               &larr; Back to login
+               &larr; Volver al inicio de sesión
              </button>
            </p>
         </form>

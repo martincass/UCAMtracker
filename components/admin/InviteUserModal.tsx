@@ -20,14 +20,15 @@ const InviteUserModal: React.FC<InviteUserModalProps> = ({ setIsOpen, addNotific
     setIsLoading(true);
 
     if (!email || !clientId || !clientName) {
-        setError('All fields are required.');
+        setError('Todos los campos son requeridos.');
         setIsLoading(false);
         return;
     }
 
     try {
-      await apiService.inviteUser(email, clientId, clientName);
-      addNotification(`Invitation sent to ${email}. They can now sign up.`, 'success');
+      // FIX: Call the correct adminInviteUser method
+      await apiService.adminInviteUser(email, clientId, clientName);
+      addNotification(`Invitación enviada a ${email}. Ahora pueden registrarse.`, 'success');
       onInviteSuccess();
       setIsOpen(false);
     } catch (err: any) {
@@ -41,14 +42,14 @@ const InviteUserModal: React.FC<InviteUserModalProps> = ({ setIsOpen, addNotific
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
-        <h2 className="text-lg font-medium text-gray-900">Invite New User</h2>
+        <h2 className="text-lg font-medium text-gray-900">Invitar Nuevo Usuario</h2>
         <p className="mt-1 text-sm text-gray-600">
-          This will add the user to the allowlist, allowing them to sign up for an account.
+          Esto agregará al usuario a la lista blanca, permitiéndole registrar una cuenta.
         </p>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-700">Email Address</label>
+            <label htmlFor="email" className="block text-sm font-medium text-gray-700">Dirección de Correo</label>
             <input
               type="email"
               id="email"
@@ -56,11 +57,11 @@ const InviteUserModal: React.FC<InviteUserModalProps> = ({ setIsOpen, addNotific
               onChange={(e) => setEmail(e.target.value)}
               required
               className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-              placeholder="user@example.com"
+              placeholder="usuario@ejemplo.com"
             />
           </div>
           <div>
-            <label htmlFor="clientId" className="block text-sm font-medium text-gray-700">Client ID</label>
+            <label htmlFor="clientId" className="block text-sm font-medium text-gray-700">ID de Cliente</label>
             <input
               type="text"
               id="clientId"
@@ -72,7 +73,7 @@ const InviteUserModal: React.FC<InviteUserModalProps> = ({ setIsOpen, addNotific
             />
           </div>
           <div>
-            <label htmlFor="clientName" className="block text-sm font-medium text-gray-700">Client Name</label>
+            <label htmlFor="clientName" className="block text-sm font-medium text-gray-700">Nombre de Cliente</label>
             <input
               type="text"
               id="clientName"
@@ -92,14 +93,14 @@ const InviteUserModal: React.FC<InviteUserModalProps> = ({ setIsOpen, addNotific
               onClick={() => setIsOpen(false)}
               className="bg-white py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
             >
-              Cancel
+              Cancelar
             </button>
             <button
               type="submit"
               disabled={isLoading}
               className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:bg-primary-300"
             >
-              {isLoading ? 'Sending...' : 'Send Invitation'}
+              {isLoading ? 'Enviando...' : 'Enviar Invitación'}
             </button>
           </div>
         </form>
