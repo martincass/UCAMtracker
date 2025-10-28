@@ -1,126 +1,141 @@
 import React, { useState } from 'react';
 import { Submission } from '../types';
 import { apiService } from '../services/apiService';
+import { fmtDate, fmtKg } from '../utils/formatting';
 import { es } from '../locale/es';
+import { CheckCircleIcon, XCircleIcon, ArrowPathIcon } from './Icons';
 import { exportToCsv } from '../utils/csvExporter';
-import { DocumentTextIcon } from './Icons';
 
 interface SubmissionsTableProps {
   submissions: Submission[];
-  setSubmissions: React.Dispatch<React.SetStateAction<Submission[]>>;
   isLoading: boolean;
   error: string | null;
-  userRole: 'admin' | 'user';
+  isAdmin: boolean;
+  refetchSubmissions: () => void;
   addNotification: (message: string, type: 'success' | 'error' | 'info') => void;
 }
 
-const StatusBadge: React.FC<{ status: Submission['status'] }> = ({ status }) => {
-  const statusMap = {
-    pendiente: { text: es.statusPending, color: 'bg-yellow-100 text-yellow-800' },
-    validado: { text: es.statusValidated, color: 'bg-green-100 text-green-800' },
-    rechazado: { text: es.statusRejected, color: 'bg-red-100 text-red-800' },
-  };
-  const { text, color } = statusMap[status] || { text: status, color: 'bg-gray-100 text-gray-800' };
-  return <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${color}`}>{text}</span>;
-};
+const SubmissionsTable: React.FC<SubmissionsTableProps> = ({ submissions, isLoading, error, isAdmin, refetchSubmissions, addNotification }) => {
+  const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
 
-const PhotoThumbnail: React.FC<{ url: string | null }> = ({ url }) => {
-  if (!url) return <span className="text-gray-400">&mdash;</span>;
-  return (
-    <a href={url} target="_blank" rel="noopener noreferrer">
-      <img src={url} alt="Evidencia" className="h-12 w-12 object-cover rounded-md" />
-    </a>
-  );
-};
-
-const SubmissionsTable: React.FC<SubmissionsTableProps> = ({ submissions, setSubmissions, isLoading, error, userRole, addNotification }) => {
-  
-  const handleExport = () => {
-    const headers: (keyof Submission)[] = ['created_at', 'client_name', 'email', 'weighing_kg', 'status', 'id'];
-    exportToCsv(`submissions_${new Date().toISOString().split('T')[0]}.csv`, submissions, headers);
-  };
-  
-  const handleStatusChange = async (id: string, newStatus: Submission['status']) => {
-    const originalSubmissions = [...submissions];
-    // Optimistic update
-    setSubmissions(prev => prev.map(s => s.id === id ? { ...s, status: newStatus } : s));
-
+  const handleStatusChange = async (submissionId: string, newStatus: 'validado' | 'rechazado' | 'pendiente') => {
+    if (actionInProgress) return;
+    setActionInProgress(submissionId);
     try {
-        await apiService.updateSubmissionStatus(id, newStatus);
-        addNotification(`Estado del reporte ${id.substring(0,8)}... actualizado.`, 'success');
+      await apiService.updateSubmissionStatus(submissionId, newStatus);
+      addNotification('Estado actualizado.', 'success');
+      refetchSubmissions();
     } catch (err: any) {
-        addNotification(`Error al actualizar estado: ${err.message}`, 'error');
-        // Revert on error
-        setSubmissions(originalSubmissions);
+      addNotification(err.message, 'error');
+    } finally {
+      setActionInProgress(null);
     }
   };
 
-  const numberFormatter = new Intl.NumberFormat('es-AR', {
-    style: 'decimal',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
+  const handleExportCsv = () => {
+    const headers: (keyof Submission)[] = ['fecha', 'cliente', 'usuario', 'pesaje_kg', 'estado', 'notas', 'reporte_id', 'foto_ingreso', 'foto_pesaje'];
+    exportToCsv(`reportes-${new Date().toISOString().split('T')[0]}.csv`, submissions, headers);
+  };
+  
+  const handleExportToSheets = async () => {
+    setIsExporting(true);
+    try {
+        const result = await apiService.exportToSheets();
+        addNotification(`${result.appended} nuevas filas exportadas a Google Sheets.`, 'success');
+    } catch(err: any) {
+        addNotification(`Error al exportar: ${err.message}`, 'error');
+    } finally {
+        setIsExporting(false);
+    }
+  };
 
+  const getStatusBadge = (status?: string) => {
+    switch (status) {
+      case 'validado':
+        return <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">{es.statusApproved}</span>;
+      case 'rechazado':
+        return <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">{es.statusRejected}</span>;
+      case 'pendiente':
+      default:
+        return <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">{es.statusPending}</span>;
+    }
+  };
+  
   return (
     <div className="bg-white p-6 rounded-lg shadow-lg">
       <div className="sm:flex sm:justify-between sm:items-center mb-4">
-        <h3 className="text-xl font-semibold text-slate-800">{es.submissionHistoryTitle}</h3>
-        {userRole === 'admin' && submissions.length > 0 && (
-            <button onClick={handleExport} className="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">
-              <DocumentTextIcon className="-ml-1 mr-2 h-5 w-5" />
-              {es.exportCsv}
-            </button>
+        <h3 className="text-xl font-semibold text-slate-800">{isAdmin ? es.tabSubmissions : es.submissionsTitle}</h3>
+        {isAdmin && (
+            <div className="flex space-x-2 mt-2 sm:mt-0">
+                <button onClick={handleExportCsv} className="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">{es.exportCsv}</button>
+                <button onClick={handleExportToSheets} disabled={isExporting} className="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-50">
+                    {isExporting ? es.exporting : es.exportToSheets}
+                </button>
+            </div>
         )}
       </div>
-      
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colDate}</th>
-              {userRole === 'admin' && <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colClient}</th>}
-              {userRole === 'admin' && <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colUser}</th>}
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colIngressPhoto}</th>
-              <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">{es.colWeighingKg}</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colWeighingPhoto}</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colReportId}</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colStatus}</th>
+              <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colDate}</th>
+              {isAdmin && <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colClient}</th>}
+              {isAdmin && <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colUser}</th>}
+              <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.formWeighingKg}</th>
+              <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fotos</th>
+              <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colNotes}</th>
+              <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colStatus}</th>
+              {isAdmin && <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{es.colActions}</th>}
             </tr>
           </thead>
           <tbody>
             {isLoading ? (
-              <tr><td colSpan={8} className="text-center p-6 text-gray-500">{es.loadingHistory}</td></tr>
+              <tr><td colSpan={isAdmin ? 8 : 6} className="text-center p-6 text-gray-500">{es.loadingSubmissions}</td></tr>
             ) : error ? (
-              <tr><td colSpan={8} className="text-center p-6 text-red-500">{error}</td></tr>
+              <tr><td colSpan={isAdmin ? 8 : 6} className="text-center p-6 text-red-500">{error}</td></tr>
             ) : submissions.length > 0 ? (
               submissions.map(s => (
-                <tr key={s.id} className="even:bg-white odd:bg-slate-50">
-                  <td className="px-4 py-3 text-sm text-gray-600">{new Date(s.created_at).toLocaleString('es-AR')}</td>
-                  {userRole === 'admin' && <td className="px-4 py-3 text-sm font-medium text-gray-900">{s.client_name}</td>}
-                  {userRole === 'admin' && <td className="px-4 py-3 text-sm text-gray-600">{s.email}</td>}
-                  <td className="px-4 py-3"><PhotoThumbnail url={s.ingress_photo_url} /></td>
-                  <td className="px-4 py-3 text-right text-sm font-mono text-gray-800">{numberFormatter.format(s.weighing_kg || 0)}</td>
-                  <td className="px-4 py-3"><PhotoThumbnail url={s.weighing_photo_url} /></td>
-                  <td className="px-4 py-3 text-sm font-mono text-gray-500">{s.id.substring(0, 8)}...</td>
-                  <td className="px-4 py-3">
-                    {userRole === 'admin' ? (
-                      <select
-                        value={s.status}
-                        onChange={(e) => handleStatusChange(s.id, e.target.value as Submission['status'])}
-                        className="rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-xs"
-                      >
-                        <option value="pendiente">{es.statusPending}</option>
-                        <option value="validado">{es.statusValidated}</option>
-                        <option value="rechazado">{es.statusRejected}</option>
-                      </select>
-                    ) : (
-                      <StatusBadge status={s.status} />
+                <tr key={s.reporte_id} className="even:bg-white odd:bg-slate-50">
+                  <td className="px-4 py-3 font-medium text-gray-900">{fmtDate(s.fecha)}</td>
+                  {isAdmin && <td className="px-4 py-3 text-gray-500">{s.cliente}</td>}
+                  {isAdmin && <td className="px-4 py-3 text-gray-500">{s.usuario}</td>}
+                  <td className="px-4 py-3 text-gray-500">{fmtKg(s.pesaje_kg)}</td>
+                  <td className="px-4 py-3 whitespace-nowrap text-sm space-x-2">
+                    {s.foto_ingreso && (
+                      <a href={s.foto_ingreso} target="_blank" rel="noopener noreferrer" title={es.viewIngressPhoto}>
+                        <img src={s.foto_ingreso} alt="Ingreso" className="h-12 w-12 object-cover inline-block rounded-md shadow-sm hover:shadow-md transition-shadow" />
+                      </a>
+                    )}
+                    {s.foto_pesaje && (
+                      <a href={s.foto_pesaje} target="_blank" rel="noopener noreferrer" title={es.viewWeighingPhoto}>
+                        <img src={s.foto_pesaje} alt="Pesaje" className="h-12 w-12 object-cover inline-block rounded-md shadow-sm hover:shadow-md transition-shadow" />
+                      </a>
                     )}
                   </td>
+                  <td className="px-4 py-3 text-gray-500 max-w-xs truncate" title={s.notas || ''}>{s.notas || '—'}</td>
+                  <td className="px-4 py-3">{getStatusBadge(s.estado)}</td>
+                  {isAdmin && (
+                    <td className="px-4 py-3 text-sm font-medium">
+                      {actionInProgress === s.reporte_id ? (
+                        <ArrowPathIcon className="h-5 w-5 animate-spin" />
+                      ) : (
+                        <select
+                          value={s.estado || 'pendiente'}
+                          onChange={(e) => handleStatusChange(s.reporte_id, e.target.value as 'validado' | 'rechazado' | 'pendiente')}
+                          className="block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
+                        >
+                          <option value="pendiente">{es.statusPending}</option>
+                          <option value="validado">{es.statusApproved}</option>
+                          <option value="rechazado">{es.statusRejected}</option>
+                        </select>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))
             ) : (
-              <tr><td colSpan={8} className="text-center p-6 text-gray-500">{es.noSubmissionsFound}</td></tr>
+              <tr><td colSpan={isAdmin ? 8 : 6} className="text-center p-6 text-gray-500">{es.noSubmissionsFound}</td></tr>
             )}
           </tbody>
         </table>

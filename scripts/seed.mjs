@@ -36,15 +36,19 @@ console.log("🌱 Starting admin user seed process...");
 async function seedAdmin() {
   try {
     // 1. Check if user already exists
-    const { data: { users }, error: listError } = await supabase.auth.admin.listUsers({ email: adminEmail });
-    if (listError) throw listError;
+    // FIX: Avoided destructuring `data` and `error` from Supabase admin calls immediately.
+    // This preserves the discriminated union type, allowing TypeScript's control-flow
+    // analysis to correctly narrow types after checking the `error` property.
+    const listUsersResponse = await supabase.auth.admin.listUsers();
+    if (listUsersResponse.error) throw listUsersResponse.error;
+    const { users } = listUsersResponse.data;
     
     let adminUser = users.find(u => u.email === adminEmail);
 
     if (adminUser) {
       console.log(`🟡 Admin user ${adminEmail} already exists. Updating password and ensuring admin role.`);
       // 2a. Update the existing user's password and metadata
-      const { data, error: updateError } = await supabase.auth.admin.updateUserById(
+      const updateUserResponse = await supabase.auth.admin.updateUserById(
         adminUser.id,
         {
           password: adminPassword,
@@ -53,13 +57,13 @@ async function seedAdmin() {
           user_metadata: { client_id: 'ADMIN' }
         }
       );
-      if (updateError) throw updateError;
-      adminUser = data.user;
+      if (updateUserResponse.error) throw updateUserResponse.error;
+      adminUser = updateUserResponse.data.user;
       console.log(`✅ Successfully updated admin user: ${adminUser.email}`);
 
     } else {
       // 2b. Create the user if they don't exist
-      const { data, error: createError } = await supabase.auth.admin.createUser({
+      const createUserResponse = await supabase.auth.admin.createUser({
         email: adminEmail,
         password: adminPassword,
         email_confirm: true, // Auto-confirm the email
@@ -70,8 +74,8 @@ async function seedAdmin() {
           client_id: 'ADMIN', // Custom metadata for client identification
         }
       });
-      if (createError) throw createError;
-      adminUser = data.user;
+      if (createUserResponse.error) throw createUserResponse.error;
+      adminUser = createUserResponse.data.user;
       console.log(`✅ Successfully created admin user: ${adminUser.email}`);
     }
 

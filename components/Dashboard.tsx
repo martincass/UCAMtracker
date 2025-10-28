@@ -1,9 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { User, Submission } from '../types';
-import { apiService } from '../services/apiService';
+import React, { useState } from 'react';
+import { User } from '../types';
 import SubmissionForm from './SubmissionForm';
-import SubmissionsTable from './SubmissionsTable';
-import { es } from '../locale/es';
+import ClientReportsTable from './ClientReportsTable'; 
 
 interface DashboardProps {
   user: User;
@@ -11,43 +9,23 @@ interface DashboardProps {
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ user, addNotification }) => {
-  const [submissions, setSubmissions] = useState<Submission[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  const fetchSubmissions = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const data = await apiService.getClientSubmissions();
-      setSubmissions(data);
-    } catch (err: any) {
-      setError(err.message);
-      addNotification(es.fetchSubmissionsError, 'error');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [addNotification]);
-
-  useEffect(() => {
-    fetchSubmissions();
-  }, [fetchSubmissions]);
-  
-  const handleSubmissionSuccess = (newSubmission: Submission) => {
-    setSubmissions(prev => [newSubmission, ...prev]);
+  const handleSubmissionSuccess = () => {
+    // This will trigger a refetch in the ClientReportsTable component
+    setRefreshKey(prevKey => prevKey + 1);
   };
 
   return (
-    <div className="space-y-8">
-      <h2 className="text-2xl font-bold text-gray-800">Panel de Cliente: {user.client_name}</h2>
-      <SubmissionForm user={user} addNotification={addNotification} onSubmissionSuccess={handleSubmissionSuccess} />
-      <SubmissionsTable 
-        submissions={submissions}
-        setSubmissions={setSubmissions}
-        isLoading={isLoading}
-        error={error}
-        userRole="user"
-        addNotification={addNotification}
+    <div className="space-y-6">
+      <SubmissionForm 
+        user={user} 
+        addNotification={addNotification} 
+        onSubmissionSuccess={handleSubmissionSuccess} 
+      />
+      <ClientReportsTable 
+        addNotification={addNotification} 
+        refreshKey={refreshKey}
       />
     </div>
   );

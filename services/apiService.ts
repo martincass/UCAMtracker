@@ -1,308 +1,303 @@
 import { supabase } from './supabaseClient';
-import { User, SignupStatus, ManagedUser, AllowlistClient, AccessRequest, SystemHealth, CreateUserResponse, Submission } from '../types';
-import type { Session, User as SupabaseUser, AuthChangeEvent } from '@supabase/supabase-js';
+import {
+    User,
+    Submission,
+    AllowlistClient,
+    CreateUserResponse,
+    AccessRequest,
+    SystemHealth,
+    ManagedUser
+} from '../types';
 
-// A simple in-memory cache for the user object to avoid repeated session checks.
-let cachedUser: User | null = null;
+class ApiError extends Error {
+  constructor(message: string, public status?: number) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
 
-const apiService = {
-  
-  mapSupabaseUserToUser(supabaseUser: SupabaseUser): User {
-    return {
-      id: supabaseUser.id,
-      email: supabaseUser.email || '',
-      role: supabaseUser.app_metadata?.role || 'user',
-      client_id: supabaseUser.user_metadata?.client_id || '',
-      client_name: supabaseUser.user_metadata?.client_name || '',
-      mustResetPassword: supabaseUser.user_metadata?.must_reset_password || false
-    };
-  },
-
-  async getSession(): Promise<User | null> {
-    if (cachedUser) return cachedUser;
-
-    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-    if (sessionError || !session) {
-      cachedUser = null;
-      return null;
-    }
-
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('must_reset_password, client_id, client_name, role')
-      .eq('user_id', session.user.id)
-      .single();
-
-    if (profileError) {
-        console.error("Error fetching user profile:", profileError);
-    }
-    
-    const user = this.mapSupabaseUserToUser(session.user);
-    user.mustResetPassword = profile?.must_reset_password || false;
-    user.role = profile?.role || user.role;
-    user.client_id = profile?.client_id || user.client_id;
-    user.client_name = profile?.client_name || user.client_name;
-
-    cachedUser = user;
-    return user;
-  },
-
-  onAuthStateChange(callback: (event: AuthChangeEvent, session: Session | null) => void) {
-    return supabase.auth.onAuthStateChange(callback);
-  },
-
-  async login(email: string, password: string): Promise<User> {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-    if (!data.user) throw new Error('Login successful but no user data returned.');
-    
-    cachedUser = null; 
-    const user = await this.getSession();
-    if (!user) throw new Error("Could not retrieve user profile after login.");
-
-    return user;
-  },
-
-  async logout(): Promise<void> {
-    const { error } = await supabase.auth.signOut();
-    cachedUser = null;
-    if (error) throw error;
-  },
-
-  async signup(email: string, password: string): Promise<{ status: SignupStatus }> {
-    const { data: allowlistEntry, error: allowlistError } = await supabase
-        .from('allowlist_clients')
-        .select('*')
-        .eq('email', email)
-        .single();
-    
-    if (allowlistError || !allowlistEntry) {
-        return { status: 'PENDING_REVIEW' };
-    }
-
-    if (!allowlistEntry.active) {
-        throw new Error("This account is currently disabled. Please contact support.");
-    }
-    
-    const { data, error } = await supabase.auth.signUp({ email, password });
-    if (error) throw error;
-    return { status: 'CONFIRMATION_SENT' };
-  },
-  
-  async requestPasswordReset(email: string): Promise<void> {
-    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/` });
-    if (error) throw error;
-  },
-  
-  async updatePassword(password: string): Promise<void> {
-      const { error } = await supabase.auth.updateUser({ password });
-      if (error) throw error;
-  },
-
-  async forceResetPassword(password: string): Promise<User> {
-    const user = await this.getSession();
-    if (!user) throw new Error("No active session found.");
-    
-    const { error: updateError } = await supabase.auth.updateUser({ password });
-    if (updateError) throw updateError;
-    
-    const { error: profileError } = await supabase.from('profiles').update({ must_reset_password: false }).eq('user_id', user.id);
-    if (profileError) console.error("Failed to update must_reset_password flag:", profileError);
-    
-    const updatedUser: User = { ...user, mustResetPassword: false };
-    cachedUser = updatedUser;
-    return updatedUser;
-  },
-  
-  async requestAccess(details: { email: string; company: string; client_id: string; note: string }): Promise<void> {
-      const { error } = await supabase.from('access_requests').insert(details);
-      if (error) throw error;
-  },
-
-  // --- SUBMISSION METHODS ---
-  async createSubmission(
-    submissionData: {
-      weighing_kg: number;
-      notes: string | null;
-      ingress_photo: File;
-      weighing_photo: File;
-    }
-  ): Promise<Submission> {
-    const user = await this.getSession();
-    if (!user) throw new Error("User not authenticated.");
-
-    const submissionId = crypto.randomUUID();
-    const bucket = 'submission-photos';
-    const rootPath = `${user.client_id}/${submissionId}`;
-
-    const uploadFile = async (file: File, name: string) => {
-      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
-      const path = `${rootPath}/${name}.${ext}`;
-      const { error } = await supabase.storage.from(bucket).upload(path, file);
-      if (error) throw new Error(`Upload failed for ${name}: ${error.message}`);
-      const { data } = supabase.storage.from(bucket).getPublicUrl(path);
-      return data.publicUrl;
-    };
-
-    const ingress_photo_url = await uploadFile(submissionData.ingress_photo, 'ingress');
-    const weighing_photo_url = await uploadFile(submissionData.weighing_photo, 'weighing');
-
-    const { data: newSubmission, error: insertError } = await supabase
-      .from('submissions')
-      .insert({
-        id: submissionId,
-        user_id: user.id,
-        client_id: user.client_id,
-        weighing_kg: submissionData.weighing_kg,
-        notes: submissionData.notes,
-        ingress_photo_url,
-        weighing_photo_url,
-      })
-      .select('*, profiles(client_name, email)')
-      .single();
-
-    if (insertError) throw insertError;
-    
-    // Remap to match Submission type
-    return {
-      ...newSubmission,
-      client_name: newSubmission.profiles?.client_name || user.client_name,
-      email: newSubmission.profiles?.email || user.email,
-    };
-  },
-  
-  async getClientSubmissions(): Promise<Submission[]> {
-    const { data, error } = await supabase.rpc('get_client_submissions');
-    if (error) throw error;
-    return data;
-  },
-  
-  // --- ADMIN METHODS ---
-  async _getAuthHeaders() {
-      const { data: { session }} = await supabase.auth.getSession();
-      if (!session) throw new Error("Not authenticated.");
-      return {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-      }
-  },
-
-  async adminGetUsers(): Promise<ManagedUser[]> {
-    const { data, error } = await supabase.rpc('get_all_users_with_details');
-    if (error) throw error;
-    return data;
-  },
-
-  async adminGetSubmissions(): Promise<Submission[]> {
-    const { data, error } = await supabase.rpc('get_all_submissions');
-    if (error) throw error;
-    return data;
-  },
-  
-  async adminGetClients(): Promise<AllowlistClient[]> {
-    const { data, error } = await supabase.from('allowlist_clients').select('*');
-    if (error) throw error;
-    return data;
-  },
-
-  async adminGetRequests(): Promise<AccessRequest[]> {
-     const { data, error } = await supabase.from('access_requests').select('*');
-     if (error) throw error;
-     return data;
-  },
-  
-  // FIX: Implement missing handleAccessRequest function
-  async adminHandleAccessRequest(requestId: string, approve: boolean): Promise<void> {
-    if (approve) {
-        const { data: request, error: fetchError } = await supabase
-            .from('access_requests')
-            .select('*')
-            .eq('id', requestId)
-            .single();
-
-        if (fetchError || !request) {
-            throw new Error(`Access request not found: ${requestId}`);
-        }
-
-        const { error: insertError } = await supabase.from('allowlist_clients').insert({
-            email: request.email,
-            client_name: request.company,
-            client_id: request.client_id || request.company.toUpperCase().replace(/\s/g, '_'),
-            active: true,
-        });
-
-        if (insertError) {
-            throw new Error(`Failed to add approved user to allowlist: ${insertError.message}`);
-        }
-    }
-
-    const { error: deleteError } = await supabase.from('access_requests').delete().eq('id', requestId);
-    if (deleteError) {
-        throw new Error(`Failed to delete access request: ${deleteError.message}`);
-    }
-  },
-
-  async adminCreateUser(email: string, clientId: string, clientName: string): Promise<CreateUserResponse> {
-      const { data, error } = await supabase.functions.invoke('admin_create_auth_user', {
-          body: { email, client_id: clientId, client_name: clientName },
-      });
-      if (error) throw error;
-      if (!data.ok) throw new Error(data.error || 'Failed to create user in Edge Function.');
-      return data;
-  },
-
-  // FIX: Implement missing inviteUser function
-  async adminInviteUser(email: string, clientId: string, clientName: string): Promise<void> {
-    const { error } = await supabase.from('allowlist_clients').insert({
-        email,
-        client_id: clientId,
-        client_name: clientName,
-        active: true
-    });
-    if (error) throw error;
-  },
-
-  async adminResetPassword(userId: string): Promise<{ password_cleartext: string }> {
-      console.warn("adminResetPassword should be an edge function. Mocking response.");
-      return { password_cleartext: 'TEMP_PASS_12345' };
-  },
-
-  async adminDeactivateUser(userId: string): Promise<void> {
-      const { error } = await supabase.rpc('admin_deactivate_user', { p_user_id: userId });
-      if (error) throw error;
-  },
-  
-  async adminArchiveUser(userId: string): Promise<void> {
-    const { error } = await supabase.rpc('admin_archive_user', { p_user_id: userId });
-    if (error) throw error;
-  },
-
-  // FIX: Implement missing adminDeleteClient function
-  async adminDeleteClient(clientId: string): Promise<void> {
-    const { error } = await supabase.from('allowlist_clients').delete().eq('id', clientId);
-    if (error) throw error;
-  },
-
-  async updateClient(clientId: string, updates: Partial<AllowlistClient>): Promise<AllowlistClient> {
-      const { data, error } = await supabase.from('allowlist_clients').update(updates).eq('id', clientId).select().single();
-      if (error) throw error;
-      return data;
-  },
-
-  async updateSubmissionStatus(id: string, status: Submission['status']): Promise<Submission> {
-    const { data, error } = await supabase
-        .from('submissions')
-        .update({ status })
-        .eq('id', id)
-        .select('*, profiles(client_name, email)')
-        .single();
-    if (error) throw error;
-    return {
-      ...data,
-      client_name: data.profiles?.client_name || 'N/A',
-      email: data.profiles?.email || 'N/A',
-    };
-  },
+// Helper to handle Supabase errors
+const handleSupabaseError = (error: any, context: string) => {
+  if (error) {
+    console.error(`ApiService Error in ${context}:`, error);
+    // Use a more detailed error message if available
+    const message = error.details || error.message || `An unknown error occurred in ${context}.`;
+    throw new ApiError(message, error.code);
+  }
 };
 
-export { apiService };
+const mapRowToSubmission = (r: any): Submission => ({
+  reporte_id: r.id,
+  fecha: r.date,
+  pesaje_kg: r.weighing_kg != null ? Number(r.weighing_kg) : 0,
+  notas: r.notes ?? null,
+  foto_ingreso: r.ingress_photo_url ?? undefined,
+  foto_pesaje: r.weighing_photo_url ?? undefined,
+  estado: r.status as 'pendiente' | 'validado' | 'rechazado' | undefined,
+  // admin-only convenience fields:
+  cliente: r.client_id,
+  usuario: r.user_email ?? r.user_id
+});
+
+export const apiService = {
+    // AUTH
+    async login(email: string, password: string): Promise<User> {
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        handleSupabaseError(error, 'login (auth)');
+        if (!data.user) throw new ApiError('Login failed: No user data returned.');
+
+        const { data: profile, error: profileError } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('user_id', data.user.id)
+            .single();
+
+        if (profileError?.code === 'PGRST116') { // "PGRST116" means no rows found
+             throw new ApiError('Error de inicio de sesión: Perfil de usuario no encontrado.', 404);
+        }
+        handleSupabaseError(profileError, 'login (fetch profile)');
+
+        return {
+            id: profile.user_id,
+            email: profile.email,
+            role: profile.role,
+            client_id: profile.client_id,
+            client_name: profile.client_name,
+            must_reset_password: profile.must_reset_password,
+        };
+    },
+
+    async logout(): Promise<void> {
+        await supabase.auth.signOut();
+    },
+
+    async getSession(): Promise<User | null> {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return null;
+
+        const { data: profile, error: profileError } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('user_id', session.user.id)
+            .single();
+        
+        if (profileError || !profile) {
+            console.warn('User session exists but profile is missing. Logging out.', profileError);
+            await this.logout();
+            return null;
+        }
+
+        return {
+            id: profile.user_id,
+            email: profile.email,
+            role: profile.role,
+            client_id: profile.client_id,
+            client_name: profile.client_name,
+            must_reset_password: profile.must_reset_password,
+        };
+    },
+    
+    async signup(email: string, password: string): Promise<{ status: 'PENDING_REVIEW' | 'CONFIRMATION_SENT' }> {
+        // Implementation remains unchanged
+        const { data: allowlistEntry } = await supabase.from('allowlist_clients').select('active').eq('email', email).single();
+        if (!allowlistEntry) {
+            return { status: 'PENDING_REVIEW' };
+        }
+        if (!allowlistEntry.active) {
+            throw new ApiError('Your account is currently disabled. Please contact support.');
+        }
+        const { error } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo: window.location.origin } });
+        handleSupabaseError(error, 'Signup');
+        return { status: 'CONFIRMATION_SENT' };
+    },
+    
+    async requestPasswordReset(email: string): Promise<void> {
+        await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+    },
+    
+    async updatePassword(password: string): Promise<void> {
+        const { error } = await supabase.auth.updateUser({ password });
+        handleSupabaseError(error, 'Update password');
+    },
+    
+    async forceResetPassword(password: string): Promise<User> {
+        const { data: { user }, error: userError } = await supabase.auth.updateUser({ password });
+        handleSupabaseError(userError, 'Force password update (auth)');
+        if (!user) throw new ApiError('Failed to update password.');
+
+        const { data: profile, error: profileError } = await supabase
+            .from('profiles')
+            .update({ must_reset_password: false })
+            .eq('user_id', user.id)
+            .select()
+            .single();
+        handleSupabaseError(profileError, 'Force password update (profile)');
+        
+        return {
+            id: profile.user_id,
+            email: profile.email,
+            role: profile.role,
+            client_id: profile.client_id,
+            client_name: profile.client_name,
+            must_reset_password: profile.must_reset_password,
+        };
+    },
+
+    // SUBMISSIONS
+    async createSubmission(
+        metadata: { fecha: string; pesaje_kg: number | string; notas?: string | null },
+        ingressPhoto: File,
+        weighingPhoto: File
+    ): Promise<void> {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new ApiError('No autenticado', 401);
+
+        const { data: profile, error: pErr } = await supabase
+            .from('profiles')
+            .select('client_id')
+            .eq('user_id', user.id)
+            .single();
+        if (pErr || !profile?.client_id) throw new ApiError('Perfil incompleto: falta client_id', 400);
+
+        const submissionId = crypto.randomUUID();
+        const bucket = 'submission-photos';
+        const basePath = `${profile.client_id}/${submissionId}`;
+
+        const { error: ingressError } = await supabase.storage.from(bucket).upload(`${basePath}/ingress.jpg`, ingressPhoto);
+        if (ingressError) throw new ApiError(`Carga foto ingreso: ${ingressError.message}`, 500);
+
+        const { error: weighingError } = await supabase.storage.from(bucket).upload(`${basePath}/weighing.jpg`, weighingPhoto);
+        if (weighingError) throw new ApiError(`Carga foto pesaje: ${weighingError.message}`, 500);
+
+        const { data: ingressUrlData } = supabase.storage.from(bucket).getPublicUrl(`${basePath}/ingress.jpg`);
+        const { data: weighingUrlData } = supabase.storage.from(bucket).getPublicUrl(`${basePath}/weighing.jpg`);
+
+        const { error: dbError } = await supabase.from('submissions').insert({
+            id: submissionId,
+            date: metadata.fecha,
+            weighing_kg: Number(metadata.pesaje_kg),
+            notes: metadata.notas ?? null,
+            ingress_photo_url: ingressUrlData.publicUrl,
+            weighing_photo_url: weighingUrlData.publicUrl,
+        });
+        if (dbError) throw new ApiError(`DB insert: ${dbError.message}`, 500);
+    },
+    
+    async clientGetSubmissions(): Promise<Submission[]> {
+        const { data, error } = await supabase.rpc('get_client_submissions');
+        handleSupabaseError(error, 'Get client submissions');
+        return (data ?? []).map(mapRowToSubmission);
+    },
+    
+    async getSubmissionPhotoUrl(publicUrl: string): Promise<string> {
+        // Since the bucket is public, we can just return the public URL directly
+        return Promise.resolve(publicUrl);
+    },
+
+    // ADMIN
+    async adminGetSubmissions(): Promise<Submission[]> {
+        const { data, error } = await supabase.rpc('get_all_submissions');
+        handleSupabaseError(error, 'Admin get submissions');
+        return (data ?? []).map(mapRowToSubmission);
+    },
+
+    async updateSubmissionStatus(submissionId: string, status: 'validado' | 'rechazado' | 'pendiente'): Promise<void> {
+        const { error } = await supabase
+            .from('submissions')
+            .update({ status: status })
+            .eq('id', submissionId)
+            .select(); // To avoid PostgREST 406 error
+        handleSupabaseError(error, 'Update submission status');
+    },
+
+    async adminGetUsers(): Promise<ManagedUser[]> {
+        const { data, error } = await supabase.rpc('get_all_users_with_details');
+        handleSupabaseError(error, 'Admin get users');
+        return data || [];
+    },
+
+    async adminCreateUser(email: string, clientId: string, clientName: string): Promise<CreateUserResponse> {
+        const { data, error } = await supabase.functions.invoke('admin_create_auth_user', {
+            body: { email, client_id: clientId, client_name: clientName },
+        });
+        if (error) handleSupabaseError(error, 'adminCreateUser function');
+        if (data.error) throw new ApiError(data.error);
+        return data;
+    },
+
+    async adminResetPassword(userId: string): Promise<{ password_cleartext: string }> {
+        const { data, error } = await supabase.functions.invoke('admin_reset_user_password', {
+            body: { user_id: userId },
+        });
+        if (error) handleSupabaseError(error, 'adminResetPassword function');
+        if (data.error) throw new ApiError(data.error);
+        return data;
+    },
+
+    async adminDeactivateUser(userId: string): Promise<void> {
+         const { error } = await supabase.rpc('admin_deactivate_user', { p_user_id: userId });
+         handleSupabaseError(error, 'Admin deactivate user');
+    },
+    
+    async adminArchiveUser(userId: string): Promise<void> {
+         const { error } = await supabase.rpc('admin_archive_user', { p_user_id: userId });
+         handleSupabaseError(error, 'Admin archive user');
+    },
+
+    async adminGetClients(): Promise<AllowlistClient[]> {
+        const { data, error } = await supabase.from('allowlist_clients').select('*').order('client_name');
+        handleSupabaseError(error, 'Admin get clients');
+        return data || [];
+    },
+
+    async updateClient(clientId: string, updates: Partial<AllowlistClient>): Promise<AllowlistClient> {
+        const { data, error } = await supabase.from('allowlist_clients').update(updates).eq('id', clientId).select().single();
+        handleSupabaseError(error, 'Update client');
+        return data;
+    },
+    
+    async adminDeleteClient(clientId: string): Promise<void> {
+        const { error } = await supabase.from('allowlist_clients').delete().eq('id', clientId);
+        handleSupabaseError(error, 'Admin delete client');
+    },
+    
+    async adminInviteUser(email: string, clientId: string, clientName: string): Promise<void> {
+        const { error } = await supabase.from('allowlist_clients').upsert({ email, client_id: clientId, client_name: clientName, active: true }, { onConflict: 'email' });
+        handleSupabaseError(error, 'Admin invite user');
+    },
+    
+    async adminGetAccessRequests(): Promise<AccessRequest[]> {
+        const { data, error } = await supabase.from('access_requests').select('*').order('created_at');
+        handleSupabaseError(error, 'Admin get access requests');
+        return data || [];
+    },
+    
+    async adminHandleAccessRequest(requestId: string, approve: boolean): Promise<void> {
+        if (approve) {
+            const { data: request } = await supabase.from('access_requests').select('*').eq('id', requestId).single();
+            if (request) {
+                await this.adminInviteUser(request.email, request.client_id, request.company);
+            }
+        }
+        await supabase.from('access_requests').delete().eq('id', requestId);
+    },
+    
+    async requestAccess(details: { email: string, company: string, client_id: string, note: string }): Promise<void> {
+        const { error } = await supabase.from('access_requests').insert(details);
+        handleSupabaseError(error, 'Submit access request');
+    },
+
+    async getSystemHealth(): Promise<SystemHealth> {
+        const { data, error } = await supabase.functions.invoke('get_system_health');
+        if (error) handleSupabaseError(error, 'getSystemHealth function');
+        if (data.error) throw new ApiError(data.error);
+        return data.health;
+    },
+    
+    async exportToSheets(): Promise<{ appended: number }> {
+        const { data, error } = await supabase.functions.invoke('export_submissions_to_sheets');
+        if (error) handleSupabaseError(error, 'exportToSheets function');
+        if (data.error) throw new ApiError(data.error);
+        return data;
+    }
+};
